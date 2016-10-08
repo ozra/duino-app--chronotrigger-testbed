@@ -1,71 +1,55 @@
-/*
-# This sample codes is for testing the pH meter V1.0.
- # Editor : YouYou
- # Date    : 2013.10.12
- # Ver      : 0.1
- # Product: pH meter
- # SKU      : SEN0161
-*/
+#include "ChronoTwinedModule.h"
+#include "SignalProcessingEma.h"
+#include "utils.h"
 
-#define PH_MEASURE_INTERVAL_SPAN 100
-float ph_reading;
+class PhOne : public ChronoTwinedFsmModule {
+   F32                        result;
+   I8                         sensor_pin = -1;
+   SignalProcessing::Ema<F32> ema = SignalProcessing::Ema<F32>(); // *TODO* use outlier filtering over a window size and % of sorted middle taken for avg'ing
+   TimeSpan                   measure_interval;
 
-void init_ph_sensor() {
-   pinMode(PH_SENSOR_PIN, INPUT);
-}
+  public:
+   PhOne(
+      I8 sensor_pin_,
+      TimeSpan measure_interval_ = 100,
+      F32 filter_window_ = 20.0
+   ) :
+      sensor_pin(sensor_pin_),
+      measure_interval(measure_interval_)
+   {
+      ema.change_k(1.0 / filter_window_);
+      pinMode(sensor_pin, INPUT);
+   }
 
-void log_ph_sensor() {
-   Serial.print("pH: ");
-   Serial.print(ph_reading, 2);
-}
+   void log() {
+      say("pH: ");
+      say(result, 2);
+   }
 
-void attend_ph_sensor() {
-   static Fsm fsm = {__STATE_NONE, 0, 0, __STATE_NONE};
-   static SignalFilterEma<float> ema(0.5);
+   void update() {
+      switch (where_to_go()) {
+      case Default:
+         if (sensor_pin == -1) {
+            fatal("\n\n\nPhOne has not been configured via `setup()`!\n\n\n");
+            delay(30000);
+         } else {
+            go_next(Main);
+         }
+      break;
 
-   if (check_state_deferring(&fsm)) return;
+      case Main:
+         I16 reading = analogRead(sensor_pin);
+         F32 smoothed_reading = ema(reading);
 
-   // unsigned long int avgValue;   //Store the average value of the sensor feedback
-   // float             b;
-   // int               buf[10];
-   // int               temp;
+         //convert the analog into millivolt
+         F32 phValueMillivolts = (F32) smoothed_reading * 5.0 / 1024; // / 6;
 
-   // //Get 10 sample value from the sensor for smooth the value
-   // for(int i=0; i<10; i++) {
-   //    buf[i] = analogRead(PH_SENSOR_PIN);
+         //convert the millivolt into pH value
+         result = 3.5 * phValueMillivolts;
 
-   //    delay(10);
-
-   // }
-
-   // //sort the last 10 samples, ascending
-   // for(int i=0; i<9; i++) {
-   //    for(int j=i+1; j<10; j++) {
-   //       if(buf[i] > buf[j]) {
-   //          temp = buf[i];
-   //          buf[i] = buf[j];
-   //          buf[j] = temp;
-   //       }
-   //    }
-   // }
-
-   // avgValue = 0;
-
-   // //take the average value of 6 center samples (remove possible outliers)
-   // for(int i=2; i<8; i++)
-   //    avgValue += buf[i];
-
-   int   reading = analogRead(PH_SENSOR_PIN);
-   // float smoothed_reading = reading;
-   float smoothed_reading = ema(reading);
-
-   //convert the analog into millivolt
-   float phValueMillivolts = (float) smoothed_reading * 5.0 / 1024 / 6;
-
-   //convert the millivolt into pH value
-   ph_reading = 3.5 * phValueMillivolts;
-
-   defer_state(&fsm, __STATE_NONE, PH_MEASURE_INTERVAL_SPAN);
-}
-
+         sleep(measure_interval);
+      break;
+      }
+   }
+};
 

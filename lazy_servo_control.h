@@ -5,161 +5,126 @@
 
 #include <Servo.h>
 
-#define LAZYSERVO_MOVEMENT_LAZYNESS_TH         0.1
-#define LAZYSERVO_SERVO_FULL_SETTLING_SPAN     1500
-#define LAZYSERVO_MINIMUM_MOVE_ALLOWANCE_SPAN  300
+// template <typename T>
+class LazyServoControl : public PercentControl<Reald> {
+   Intd  servo_pin;
+   Reald move_lazyness_thresh;
+   Intd  full_rotate_duration;
+   Intd  min_rotate_duration;
+   Reald min_usecs;
+   Reald max_usecs;
 
-#define LAZYSERVO__STATE_MONITOR      1
-#define LAZYSERVO__STATE_ADJUST       2
-#define LAZYSERVO__STATE_ADJUSTING    3
-#define LAZYSERVO__STATE_SLEEP        4
-#define LAZYSERVO__STATE_WAKEUP       5
+   Reald prev_adjusted_value = -1.0;
+   Reald target_value = 0.5;  // Center it as initial target_position_micros (value in unit percent)
 
-#define LAZYSERVO__STATE_MONITOR_SUB__IS_AWAKE 101
-#define LAZYSERVO__STATE_MONITOR_SUB__IS_ASLEEP 102
+   Servo servo;   // create servo object to control a servo
 
-Servo lazy_servo;   // create servo object to control a servo
+  public:
+   static const Intd MonitorWhileAwake    = 1;
+   static const Intd MonitorWhileAsleep   = 2;
+   static const Intd ServoSleep           = 3;
+   static const Intd ServoWakeup          = 4;
 
-float lazy_servo_target = 0.5;  // Center it as initial target_position_micros (value in unit percent)
+   LazyServoControl(
+               Intd     servo_pin_,
+               Reald    move_lazyness_thresh_ = 0.1,
+               TimeSpan full_rotate_duration_ = 1500,
+               TimeSpan min_rotate_duration_ = 20,
+               Intd     min_usecs_ = 544,
+               Intd     max_usecs_ = 2400
+   ) :
+      servo_pin(servo_pin_),
+      move_lazyness_thresh(move_lazyness_thresh_),
+      full_rotate_duration(full_rotate_duration_),
+      min_rotate_duration(min_rotate_duration_)
+   {
+      set_servo_limits(min_usecs_, max_usecs_),
 
-void init_lazy_servo_control(void) {
-}
+      go_next(MonitorWhileAsleep);
+   }
 
-void attend_lazy_servo_control(void) {
-   static Fsm fsm = {__STATE_AWAIT_DEPS, 0, 0, __STATE_NONE};
-   static int monitor_sub_state = LAZYSERVO__STATE_MONITOR_SUB__IS_ASLEEP;
+   void set_servo_limits(Intd min_usecs_, Intd max_usecs_) {
+      min_usecs = min_usecs_;
+      max_usecs = max_usecs_;
+   }
 
-   static int     prev_servo_target = -1.0;
-   static int     target_position_micros;
+   void set(Reald value_) {
+      target_value = value_;
+   }
 
-   int   movement_delta;
-   int   time_allowance;
-   bool  trigger_change;
-   // int   check_ret;
+   void update() {
+      Intd  allowance;
 
-   switch (fsm.state) {
-   case __STATE_AWAIT_DEPS:  // *TODO* could be generalized to simply "init" stage!
-      Serial.println("__STATE_AWAIT_DEPS");
-      if (temps_is_available_ && humidity_is_available_) {
-         Serial.print("Dependencies source values are ready for VENT CTRL!  > > > TAKING OFF!");
+      switch (where_to_go()) {
+      case MonitorWhileAsleep:
+         // Serial.println("MonitorWhileAsleep");
 
-         set_state(&fsm, LAZYSERVO__STATE_MONITOR);
-      // } else {
-      //    Serial.print("Still awaiting dependencies for Vent Ctrl!");
-      //    defer_state(&fsm, __STATE_AWAIT_DEPS, StateBreaker__DEPS_POLLING_INTERVAL_SPAN);
-      // JUST KEEP STATE AND KEEP ROTATING - SIMPLY!
-      }
-      break;
-
-   case LAZYSERVO__STATE_MONITOR:
-      // Serial.println("LAZYSERVO__STATE_MONITOR");
-      target_position_micros = (int) lround(544.0 + (2400.0 - 600.0) * lazy_servo_target);
-
-      trigger_change = false;
-
-      if (abs(lazy_servo_target - prev_servo_target) > LAZYSERVO_MOVEMENT_LAZYNESS_TH) {
-         trigger_change = true;
-         // Serial.print(", ratio: "); Serial.print(ratio);
-         // Serial.print(", clipped ratio: "); Serial.print(clipped_ratio);
-         // Serial.print(", fpos: "); Serial.print((180.0 * min(1.0, cur_delta / LAZYSERVO_FULL_OPEN_DELTA_TH)));
-         // Serial.print(", ");
-         Serial.print("int target_position_micros:                     "); Serial.println(target_position_micros);
-      }
-      // } else {
-         // Serial.println("LAZYSERVO__STATE_MONITOR  - No action yet...");
-      // }
-      // Serial.println("LAZYSERVO__STATE_MONITOR");
-      if (trigger_change) {
-         // Serial.println("LAZYSERVO__STATE_MONITOR   - TRIGGER change!");
-         if (monitor_sub_state == LAZYSERVO__STATE_MONITOR_SUB__IS_ASLEEP) {
-            set_state(&fsm, LAZYSERVO__STATE_WAKEUP);
+         if (breach_lazyness_threshold()) {
+            go_next(ServoWakeup);
          } else {
-            set_state(&fsm, LAZYSERVO__STATE_ADJUST);
+            sleep(50);
          }
-      } else {
-         if (check_state_deferring(&fsm) == 0) {
-            // Serial.println("LAZYSERVO__STATE_MONITOR - no transition - update trans-target to monitor _or_ sleep!");
-            if (monitor_sub_state == LAZYSERVO__STATE_MONITOR_SUB__IS_ASLEEP) {
-               set_state(&fsm, LAZYSERVO__STATE_ADJUSTING);
-               defer_state(&fsm, LAZYSERVO__STATE_MONITOR, 300, true); // *TODO* time_allowance);
-            } else {
-               defer_state(&fsm, LAZYSERVO__STATE_SLEEP, 2500, true); // *TODO* time_allowance);
-            }
+      break;
+
+      case MonitorWhileAwake:
+         // Serial.println("MonitorWhileAwake");
+         if (breach_lazyness_threshold()) {
+            allowance = adjust_servo(); // go_next(Adjust);
+            sleep(allowance);
+         } else {
+            go_after(ServoSleep, 2500, false);
          }
+      break;
+
+      case ServoWakeup:
+         Serial.println("ServoWakeup");
+         servo.attach(servo_pin);
+
+         allowance = adjust_servo();
+         go_after_sleep(MonitorWhileAwake, allowance);
+      break;
+
+      case ServoSleep:
+         Serial.println("ServoSleep");
+         servo.detach();
+
+         go_next(MonitorWhileAsleep);
+      break;
       }
+   }
 
-      break;
+   void log() {}
 
-   case LAZYSERVO__STATE_WAKEUP:
-      Serial.println("LAZYSERVO__STATE_WAKEUP");
-      lazy_servo.attach(LAZYSERVO_SERVO_PIN);
-      monitor_sub_state = LAZYSERVO__STATE_MONITOR_SUB__IS_AWAKE;
-      set_state(&fsm, LAZYSERVO__STATE_ADJUST);
-      break;
-
-   case LAZYSERVO__STATE_ADJUST:
-      Serial.println("LAZYSERVO__STATE_ADJUST");
+  private:
+   Intd adjust_servo() {
+      Serial.println("Adjust");
 
       // Serial.print("writes target_position_micros ");
       // Serial.print(target_position_micros);
       // Serial.print("to servo.");
       // Serial.println();
 
-      lazy_servo.writeMicroseconds(target_position_micros);
+      Intd target_position_micros = (Intd) lround(min_usecs + ((max_usecs - min_usecs) * target_value));
 
-      movement_delta = abs(lazy_servo_target - prev_servo_target);
-      // time_allowance = (movement_delta * LAZYSERVO_SERVO_FULL_SETTLING_SPAN) / 180 + 5;
-      time_allowance = max(
-         LAZYSERVO_MINIMUM_MOVE_ALLOWANCE_SPAN,
+      servo.writeMicroseconds(target_position_micros);
+
+      Reald adjustment_delta = abs(target_value - prev_adjusted_value);
+
+      Intd time_allowance = max(
+         min_rotate_duration,
          min(
-            LAZYSERVO_SERVO_FULL_SETTLING_SPAN,
-            (movement_delta * LAZYSERVO_SERVO_FULL_SETTLING_SPAN) / 2400
+            full_rotate_duration,
+            (adjustment_delta * full_rotate_duration)
          )
       );
 
-      prev_servo_target = lazy_servo_target;
+      prev_adjusted_value = target_value;
 
-      Serial.print("- - - time_allowance: ");
-      Serial.println(time_allowance);
-
-      set_state(&fsm, LAZYSERVO__STATE_ADJUSTING);
-      defer_state(&fsm, LAZYSERVO__STATE_MONITOR, time_allowance);
-      break;
-
-   case LAZYSERVO__STATE_ADJUSTING:
-      // Serial.println("LAZYSERVO__STATE_ADJUSTING");
-
-      // check_ret = check_state_deferring(&fsm);
-      check_state_deferring(&fsm);
-      // Serial.print("check_state_deferring(&fsm) = ");
-      // Serial.println(check_ret);
-
-      // if (false) { // trigger_change) {
-      //    Serial.println("trigger_change!!");
-      //    set_state(&fsm, LAZYSERVO__STATE_ADJUST);
-      //    defer_state(&fsm, LAZYSERVO__STATE_SLEEP, LAZYSERVO_SERVO_FULL_SETTLING_SPAN);
-      // } else {
-         // if (check_ret == 2) {
-         //    // Happens at the exakt event of state transition (= 2)
-         //    Serial.println("LAZYSERVO__STATE_ADJUSTING - just when transitioning to sleep");
-         // }
-      // }
-
-      // IF triggering changes occur in "adjusting", we should _keep_ the timeout
-      // (or repeat - NO - keep the remained: which means we need
-      // `retarget_defer()` - so that on "timeout" LAZYSERVO__STATE_ADJUST is next
-      // target (again) after us - instead of sleep. So it's still given the
-      // "rest-period" needed to reach a target and not starting to hatter.
-
-      break;
-
-   case LAZYSERVO__STATE_SLEEP:
-      Serial.println("LAZYSERVO__STATE_SLEEP");
-      lazy_servo.detach();
-      monitor_sub_state = LAZYSERVO__STATE_MONITOR_SUB__IS_ASLEEP;
-      set_state(&fsm, LAZYSERVO__STATE_MONITOR);
-      break;
+      return time_allowance;
    }
-}
 
+   Bool breach_lazyness_threshold() {
+      return (abs(target_value - prev_adjusted_value) > move_lazyness_thresh);
+   }
+};
 

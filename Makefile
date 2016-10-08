@@ -1,9 +1,27 @@
 
+# NICE_ERRORS=1
 
-# *TODO* INSERT: below, modify with the current (is wrong)
-# /usr/share/arduino/hardware/tools/avrdude -C/usr/share/arduino/hardware/tools/avrdude.conf -v -patmega2560 -cwiring -P/dev/ttyACM0 -b115200 -D -Uflash:w:/tmp/build3808000555631519305.tmp/schwarzwald_multiple_parts_testbed.cpp.hex:i
+ifdef NICE_ERRORS
+	NICE_ERRORS_COMPILE_ONLY = 1
 
+	CC_NAME      = clang
+	CXX_NAME     = clang++
 
+	CFLAGS_STD        = -std=c11
+	CXXFLAGS_STD      = -std=c++11
+
+	CXXALTS = -DNICE_ERRORS
+
+	EXTRA_INCLUDES = -I/usr/lib/avr/include -I/usr/share/arduino/hardware/arduino/cores/arduino -I/usr/share/arduino/hardware/arduino/variants/mega    -I/usr/share/arduino/libraries/Servo    -I/usr/share/arduino/libraries/Wire -I/usr/share/arduino/libraries/Wire -I/usr/share/arduino/libraries/Wire/utility
+
+else
+	CC_NAME      = avr-gcc
+	CXX_NAME     = avr-g++
+
+	CFLAGS_STD        = -std=gnu11
+	CXXFLAGS_STD      = -std=gnu++11
+
+endif
 
 ### DISCLAIMER
 ### This is an example Makefile and it MUST be configured to suit your needs.
@@ -40,6 +58,8 @@ USER_LIB_PATH     :=  $(realpath $(PROJECT_DIR)/lib)
 BOARD_TAG         = mega
 BOARD_SUB         = atmega2560
 
+MCU = atmega2560
+
 ### MONITOR_BAUDRATE
 ### It must be set to Serial baudrate value you are using.
 MONITOR_BAUDRATE  = 9600
@@ -52,19 +72,19 @@ AVR_TOOLS_DIR     = /usr
 ### AVRDDUDE
 ### Path to avrdude directory.
 AVRDDUDE          = /usr/bin/avrdude
-
-### CFLAGS_STD
-CFLAGS_STD        = -std=gnu11
-
-### CXXFLAGS_STD
-CXXFLAGS_STD      = -std=gnu++11
+AVRDUDE2 		  = /usr/share/arduino/hardware/tools/avrdude
 
 ### CPPFLAGS
 ### Flags you might want to set for debugging purpose. Comment to stop.
 CXXFLAGS_WARNS    = -pedantic -Wall -Wextra
 
 
-CXXFLAGS         = $(CXXFLAGS_WARNS) -I/home/oscar/sketchbook/libraries/OneWire -I/home/oscar/sketchbook/libraries/DallasTemperature/
+CXXFLAGS = $(CXXFLAGS_WARNS) $(EXTRA_INCLUDES)
+CXXFLAGS += $(CXXALTS)
+CXXFLAGS += $(CXXFLAGS_STD)
+CXXFLAGS += -I/home/oscar/sketchbook/libraries/OneWire -I/home/oscar/sketchbook/libraries/DallasTemperature/
+
+CFLAGS = $(CFLAGS_STD)
 
 ### If avr-gcc -v is higher than 4.9, activate coloring of the output
 ifeq "$(AVR_GCC_VERSION)" "1"
@@ -86,3 +106,10 @@ OBJDIR            = $(PROJECT_DIR)/bin/$(CURRENT_DIR)/$(BOARD_TAG)
 ### path to Arduino.mk, inside the ARDMK_DIR, don't touch.
 include $(ARDMK_DIR)/Arduino.mk
 
+
+upload:
+	$(AVRDUDE2) -C/usr/share/arduino/hardware/tools/avrdude.conf -v -patmega2560 -cwiring -P/dev/ttyACM0 -b115200 -D -U flash:w:/home/oscar/3-p/arduino/schwarzwald_multiple_parts_testbed/bin/schwarzwald_multiple_parts_testbed/mega/schwarzwald_multiple_parts_testbed.hex:i
+
+log:
+	stty -F /dev/ttyACM0 9600 raw -clocal -echo icrnl
+	cat /dev/ttyACM0

@@ -1,97 +1,96 @@
+#ifndef STATE_BREAKER
+#define STATE_BREAKER
+
 #include <Arduino.h>
 #include <Wire.h>
+#include "utils.h"
 
+typedef Intd FsmState;
 
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-// *TODO* move this to "signal_processing"
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-// *TODO* Lib-stuff!
-// *TODO* join forces with `SignalFilterEma`
-#define FAKE_INT_NIL    -31760
-
-template <typename T>
-class SignalFilterEma {
-   T     outer_type = 0;
-   float prev_value = FAKE_INT_NIL;
-   float k_value;
+class FsmHelper {
+   FsmState    state             = Default;
+   FsmState    scheduled_state   = NoWhere;
+   TimeSpan    trans_delay       = 0; // We can't just calculate scheduled-time, since we can re-schedule, and don't know the previous schedules duration then.
+   TimeStamp   last_ts           = 0;
+   Bool        in_sleeping_wait  = false;
 
   public:
-   SignalFilterEma(float k_value_) {
-      k_value = k_value_;
+   static const Intd  NoWhere      = 0;
+   static const Intd  Default      = -1;
+   static const Intd  Main         = -2;
+   static const Intd  FsmSleeping  = -9999;
+
+   FsmState where_to_go() {
+      if (scheduled_state == NoWhere) {
+         return state;
+
+      } else if ((timestamp() - last_ts) > trans_delay) {
+         state = scheduled_state;
+         cancel_scheduled_state();
+         return state;
+
+      } else if (in_sleeping_wait) {
+         return FsmSleeping;
+
+      } else {
+         return state;
+      }
    }
 
-   float operator()(T outer_reading) {
-      if (prev_value == FAKE_INT_NIL) // On the first reading ever
-         prev_value = (float) outer_reading;
-
-      float new_val = (
-         (((float)outer_reading) * k_value) +
-         (prev_value * (1 - k_value))
-      );
-
-      prev_value = new_val;
-      // return (T) new_val;
-      return new_val;
+   Bool is_sleeping() {
+      return where_to_go() == FsmSleeping; //in_sleeping_wait;
    }
+
+   // Bool has_scheduled() {
+   //    if (scheduled_state) {
+   //       return true;
+   //    } else {
+   //       return false;
+   //    }
+   // }
+
+   void go_next(FsmState state_, Bool keep_scheduled = false) {
+      state = state_;
+      touch();
+
+      if (keep_scheduled == false)
+         cancel_scheduled_state();
+   }
+
+   void go_after(FsmState state_, TimeSpan delay, Bool reset_timestamp) {
+      in_sleeping_wait = false;
+      trans_delay = delay;
+      scheduled_state = state_;
+      if (reset_timestamp || scheduled_state == NoWhere) {
+         touch();
+      }
+   }
+
+   void go_after_sleep(FsmState state_, TimeSpan delay) {
+      go_after(state_, delay, true);
+      in_sleeping_wait = true;
+   }
+
+   void sleep(TimeSpan delay) {
+      go_after_sleep(state, delay);
+   }
+
+   void cancel_scheduled_state() {
+      scheduled_state = NoWhere;
+      trans_delay = 0;
+      touch();
+   }
+
+  private:
+   TimeStamp timestamp() {
+      return millis();  // should something else be needed...
+   }
+
+   void touch() {
+      last_ts = timestamp();
+   }
+
 };
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- ---
 
 
-
-
-
-
-#define __STATE_NONE 0
-#define __STATE_AWAIT_DEPS -1
-#define __STATE_DEFAULT -2
-
-#ifndef StateBreaker__DEPS_POLLING_INTERVAL_SPAN
-    #define StateBreaker__DEPS_POLLING_INTERVAL_SPAN 0
 #endif
-
-
-typedef unsigned long TimeStamp;
-
-struct Fsm {
-  int           state;
-  unsigned int  trans_delay;
-  TimeStamp     trans_ts;
-  int           scheduled_state;
-};
-
-void set_state(Fsm *fsm, int state) {
-    fsm->state = state;
-    fsm->scheduled_state = __STATE_NONE;
-}
-
-// *TODO* maybe keeping trans_ts should be standard when scheduled_state is
-// already set - thus meaning we're chaning/re-directing from an already planned
-// target. If we're setting from scratch (no already plannet) then it timestamps.
-// And if override is wished - THEN we flag "force_reset_ts" instead.
-void defer_state(Fsm *fsm, int state, int defer, bool leave_ts_untouched = false) {
-    if (leave_ts_untouched == false) {
-        fsm->trans_ts = millis();
-    }
-    fsm->trans_delay = defer;
-    // fsm->state = ST_ALL_DEFERRED_TRANSISTION;
-    fsm->scheduled_state = state;
-}
-
-int check_state_deferring(Fsm *fsm) {
-    // if (fsm->state == ST_ALL_DEFERRED_TRANSISTION) {
-    if (fsm->scheduled_state == __STATE_NONE)
-        return 0;
-
-    if ((millis() - fsm->trans_ts) < fsm->trans_delay)
-        return 1;
-
-    fsm->state = fsm->scheduled_state;
-    fsm->scheduled_state = __STATE_NONE;
-    return 2;
-}

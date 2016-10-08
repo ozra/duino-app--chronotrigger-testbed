@@ -5,180 +5,178 @@
 
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include "SignalProcessingEma.h"
+#include "utils.h"
+#include "ChronoTwinedModule.h"
 
-void debug_print_temp_sensor_addr(int sensorIx, uint8_t *addrId);
 
-#define TEMPING_MAX_SENSORS            10
 #define TEMPING_FULL_12BIT_WAIT_SPAN   750
-#define TEMPING_INITIAL_WAIT_SPAN      750
-#define TEMPING_CHECK_INTERVAL_SPAN    300
 
-//| Smoothing Strength in (1.0 / lookback) unit
-//| Is set to a "lookback"(*) of 2 by default - that is: (1.0 / 2.0) = 0.5
-//| If your sensors are erratic and you can tolerate slower update of the value,
-//| you can "increase the lookback", that is: _lower the factor_.
-//|
-//| (*) The steps refer to the similarity with an SMA and thereby a window size.
-//|
-#define TEMPING_FILTER_SIGNAL_EMA_K    0.5
+typedef uint8_t   OneWireDeviceAddr[8];
+typedef uint8_t*  OneWireDeviceAddrPtr;
 
-#define TEMPING__STATE_REQUEST         1
-#define TEMPING__STATE_INITIAL_WAIT    2
-#define TEMPING__STATE_AWAIT_RESULTS   3
 
-// Pass our temperature_sensors__OnewireBus reference to Dallas Temperature.
-bool temps_is_available_ = false;
+template <Intd ALLOC_SENSORS>
+class TempSensors : public ChronoTwinedFsmModule {
+   OneWire&                   onewire_bus;
+   DallasTemperature          temp_sensors_interface;
+   SignalProcessing::Ema<F32> ema = SignalProcessing::Ema<F32>(); // *TODO* use outlier filtering over a window size and % of sorted middle taken for avg'ing
 
-DallasTemperature tempSensorsInterface(&temperature_sensors__OnewireBus);
-typedef uint8_t OneWireDeviceAddress[8];
+   TimeSpan          initial_wait;
+   TimeSpan          check_interval;
 
-OneWireDeviceAddress tempSensorAddrIds[TEMPING_MAX_SENSORS];
-float temp_measures[TEMPING_MAX_SENSORS];
-bool tempGotten[TEMPING_MAX_SENSORS];
-int actualTempSensorsCount;
+   Bool              ready = false;
+   Intd              actual_sensor_count;
 
-void init_temp_sensors(void) {
-   Serial.println("Initializing Dallas Temperature IC Control");
+   OneWireDeviceAddr temp_sensor_addr_ids[ALLOC_SENSORS];
+   Bool              temp_gotten[ALLOC_SENSORS];
 
-   // Start up the library
-   tempSensorsInterface.begin();
-   tempSensorsInterface.setWaitForConversion(false);
+   Intd              gotten_results_count;
 
-   Serial.print("isParasitePowerMode: ");
-   Serial.print(tempSensorsInterface.isParasitePowerMode());
-   Serial.println();
+  public:
+   Reald             results[ALLOC_SENSORS];
 
-   int sensorIx = 0;
-   uint8_t *currentSensorAddrId;
+   static const Intd RequestReadings = 1;
+   static const Intd AwaitReadings   = 2;
 
-   while (true) {
-      currentSensorAddrId = tempSensorAddrIds[sensorIx];
+   TempSensors(
+      OneWire& onewire_bus_,
+      Reald smoothing_k_value_,
+      TimeSpan initial_wait_ = TEMPING_FULL_12BIT_WAIT_SPAN,
+      TimeSpan check_interval_ = 300
+   ) :
+      onewire_bus(onewire_bus_),
+      temp_sensors_interface(&onewire_bus),
+      initial_wait(initial_wait_),
+      check_interval(check_interval_)
+   {
+      ema.change_k(smoothing_k_value_);
 
-      if (temperature_sensors__OnewireBus.search(currentSensorAddrId) == false)
-         break;
 
-      debug_print_temp_sensor_addr(sensorIx, currentSensorAddrId);
 
-      tempGotten[sensorIx] = false;
-      ++sensorIx;
-   }
 
-   actualTempSensorsCount = sensorIx;
+      // Move anything not a simple list-init back to `setup()` again!
 
-}
 
-void debug_print_temp_sensor_addr(int sensorIx, uint8_t *addrId) {
-   Serial.print("Temp sensor ");
-   Serial.print(sensorIx);
-   Serial.print(": ");
+      // say("TempSensors: Dallas Temperature IC Control");
 
-   for (int byte_ix = 0; byte_ix < 8; ++byte_ix) {
-      if (addrId[byte_ix] < 10)
-         Serial.print("00");
-      else if (addrId[byte_ix] < 100)
-         Serial.print("0");
+      // Start up the library
+      temp_sensors_interface.begin();
+      temp_sensors_interface.setWaitForConversion(false);
 
-      Serial.print(addrId[byte_ix]);
-   }
+      // say("isParasitePowerMode: ");
+      // say(temp_sensors_interface.isParasitePowerMode());
+      // say("\n");
 
-   Serial.println();
-}
+      Intd  sensor_ix = 0;
+      U8*   tmp_addr_id;
 
-void log_temp_sensors(void) {
-   for(int ix = 0; ix < actualTempSensorsCount; ++ix) {
-      Serial.print("  T[");
-      Serial.print(ix);
-      Serial.print("]: ");
-      Serial.print(temp_measures[ix]);
-      Serial.print("C, ");
-   }
-}
+      while (true) {
+         tmp_addr_id = temp_sensor_addr_ids[sensor_ix];
 
-void attend_temp_sensors(void) {
-   static Fsm fsm = {TEMPING__STATE_REQUEST, 0, 0, __STATE_NONE};
-   static int tempSensorsResultCount;
-   uint8_t *addrId;
-   float temp_in_celcius = 0.0;
-   float prev_value = 0.0;
-   float freshest_reading = FAKE_INT_NIL;
+         if (onewire_bus.search(tmp_addr_id) == false)
+            break;
 
-   switch (fsm.state) {
-   case TEMPING__STATE_REQUEST:
-      // Serial.println("TEMPING__STATE_REQUEST");
+         // *TODO* check that it actually is a temp-sensor device!
 
-      // call tempSensorsInterface.requestTemperatures() to issue a global temperature
-      // request to all devices on the bus
-      tempSensorsInterface.requestTemperatures(); // Send the command to get temperatures
-      tempSensorsResultCount = 0;
-      for(int ix = 0; ix < actualTempSensorsCount; ++ix) {
-         tempGotten[ix] = false;
+         // *TODO* check that ALLOC_SENSORS isn't surpassed - if so alert()!
+
+         // log_addr_id(sensor_ix, tmp_addr_id);
+
+         temp_gotten[sensor_ix] = false;
+         ++sensor_ix;
       }
-      set_state(&fsm, TEMPING__STATE_INITIAL_WAIT);
+
+      actual_sensor_count = sensor_ix;
+
+      go_next(RequestReadings);
+   }
+
+   bool is_ready() {
+      return ready;
+   }
+
+   void log_addr_id(const OneWireDeviceAddrPtr tmp_addr_id) {
+      for (Intd byte_ix = 0; byte_ix < 8; ++byte_ix) {
+         say_hex(tmp_addr_id[byte_ix]);
+      }
+   }
+
+   void log() {
+      for(Intd ix = 0; ix < actual_sensor_count; ++ix) {
+         say("  T[");
+         say(ix);
+         say("](");
+         log_addr_id(temp_sensor_addr_ids[ix]);
+         say("): ");
+         say(results[ix]);
+         say("C, ");
+      }
+   }
+
+   void update() {
+      OneWireDeviceAddrPtr tmp_addr_id;
+      Reald                freshest_reading;
+
+      switch (where_to_go()) {
+      case RequestReadings:
+         // say("TempSensors:RequestReadings\n");
+
+         // call temp_sensors_interface.requestTemperatures() to issue a global temperature
+         // request to all devices on the bus
+         temp_sensors_interface.requestTemperatures(); // Send the command to get temperatures
+         gotten_results_count = 0;
+         for(Intd ix = 0; ix < actual_sensor_count; ++ix) {
+            temp_gotten[ix] = false;
+         }
+
+         go_after_sleep(AwaitReadings, initial_wait);
       break;
 
-   case TEMPING__STATE_INITIAL_WAIT:
-      if (check_state_deferring(&fsm)) return;
-      // Serial.println("TEMPING__STATE_INITIAL_WAIT");
+      case AwaitReadings:
+         // say("TEMPING__STATE_AWAIT_RESULTS\n");
 
-      defer_state(&fsm, TEMPING__STATE_AWAIT_RESULTS, TEMPING_INITIAL_WAIT_SPAN);
-      break;
+         for(Intd ix = 0; ix < actual_sensor_count; ++ix) {
+            if (temp_gotten[ix])
+               continue;
 
-   case TEMPING__STATE_AWAIT_RESULTS:
-      if (check_state_deferring(&fsm)) return;
+            tmp_addr_id = temp_sensor_addr_ids[ix];
+            if (temp_sensors_interface.isConversionAvailable(tmp_addr_id)) {
+               // say("isConversionComplete?: ");
+               // say(temp_sensors_interface.isConversionComplete());
+               //say("\n");
 
-      // Serial.println("TEMPING__STATE_AWAIT_RESULTS");
+               temp_gotten[ix] = true;
+               gotten_results_count++;
+               freshest_reading = temp_sensors_interface.getTempC(tmp_addr_id);
+               results[ix] = ema(freshest_reading);
 
-      for(int ix = 0; ix < actualTempSensorsCount; ++ix) {
-         if (tempGotten[ix])
-            continue;
-
-         addrId = tempSensorAddrIds[ix];
-         if (tempSensorsInterface.isConversionAvailable(addrId)) {
-            // Serial.print("isConversionComplete?: ");
-            // Serial.print(tempSensorsInterface.isConversionComplete());
-            //Serial.println();
-
-            tempGotten[ix] = true;
-            tempSensorsResultCount++;
-
-            prev_value = temp_measures[ix];
-            freshest_reading = tempSensorsInterface.getTempC(addrId);
-
-            // First reading ever - could have its own state for it instead.
-            if (prev_value == FAKE_INT_NIL) {
-               temp_in_celcius = freshest_reading;
-            } else {
-               temp_in_celcius = (
-                  (freshest_reading * TEMPING_FILTER_SIGNAL_EMA_K) +
-                  (prev_value * (1 - TEMPING_FILTER_SIGNAL_EMA_K))
-               );
-            }
-
-            temp_measures[ix] = temp_in_celcius;
-
-            if (ix == actualTempSensorsCount - 1) {
-               Serial.print("Got ");
-               Serial.print(temp_measures[ix]);
-               Serial.print(" for ");
-               Serial.print(ix);
-               Serial.print(" from freshest reading ");
-               Serial.print(freshest_reading);
-               Serial.print(" - which is err of ");
-               Serial.print(freshest_reading - temp_measures[ix]);
-               Serial.println();
+               // if (ix == actual_sensor_count - 1) {
+               //    say("Got ");
+               //    say(results[ix]);
+               //    say(" for ");
+               //    say(ix);
+               //    say(" from freshest reading ");
+               //    say(freshest_reading);
+               //    say(" - which is err of ");
+               //    say(freshest_reading - results[ix]);
+               //    say("\n");
+               // }
             }
          }
-      }
 
-      if (tempSensorsResultCount == actualTempSensorsCount) {
-         temps_is_available_ = true;
-         // Serial.println("TEMPING - GOT ALL RESULTS!");
-         set_state(&fsm, TEMPING__STATE_REQUEST);
-      } else {
-         // Serial.println("Wait some more...");
-         // Wait some more
-         defer_state(&fsm, TEMPING__STATE_AWAIT_RESULTS, TEMPING_CHECK_INTERVAL_SPAN);
-      }
+         if (gotten_results_count == actual_sensor_count) {
+            ready = true;
+            // say("TEMPING - GOT ALL RESULTS!\n");
+            go_next(RequestReadings);
+         } else {
+            // say("Wait some more...\n");
+            // Wait some more
+            go_after_sleep(AwaitReadings, check_interval);
+         }
       break;
+      }
    }
-}
+
+
+};

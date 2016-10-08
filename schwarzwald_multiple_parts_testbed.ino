@@ -1,143 +1,124 @@
-#include <Arduino.h>
-#include <Wire.h>
-
-
-
-
-
-
-
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 // For quickly disabling running of circuit without pulling cables etc.:
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 #define COMPLETE_HALT 0
 // #define COMPLETE_HALT 1
+
 #define DEBUG 1
-
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-// PIN MAPPINGS
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-#define ONE_WIRE_BUS_PIN         2
-
-#define DHT_DATA_PIN             3  // Used interrupt 0 for a while - thus pin 3
-
-#define LAZYSERVO_SERVO_PIN      4
-
-#define SONAR_TRIGGER_PIN        8
-#define SONAR_ECHO_SENSING_PIN   9
-
-#define PH_SENSOR_PIN            12
-
-#define DEBUG_LOG_INTERVAL_SPAN 3000
-#define DEBUG_LOG__STATE_REPORT 1  // Might as well go with simply "DEFAULT" - we're just using the defer-functionality in practise
-
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-// FILE DEPS
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-// - UTIL MODULES -
 
-// Finite State Machine
-#define StateBreaker__DEPS_POLLING_INTERVAL_SPAN 1
+
+//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+#include <Arduino.h>
+#include <Wire.h>
+#include "utils.h"
+
+
+// class PreInitListsSetup {
+//   public:
+//    PreInitListsSetup() {
+//       Serial.begin(9600);
+//       sayln("Serial begun");
+//       delay(2000);
+//       sayln("And so on...");
+//    }
+// };
+
+// auto pre_init_lists_setup  = PreInitListsSetup();
+
+
 #include "StateBreaker.h"
 
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-// - SENSOR MODULES -
 
-// Sonar
-#define sonar_sensors__BREATHING_ROOM_INTERVAL_SPAN 35
-#include "sonar_sensors.h"
-
-// Humidity
-#define DHT_RH_SCALE_FACTOR 2.0
-
-   #include <Dht11.h>
-#include "humidity_sensors.h"
-
-// pH
-#include "ph_sensor.h"
-
-// Temperature
-// Setup a temperature_sensors__OnewireBus instance to communicate with any OneWire devices
-// (not just Maxim/Dallas temperature ICs)
 #include <OneWire.h>
-OneWire oneWireBus1(ONE_WIRE_BUS_PIN);
-#define temperature_sensors__OnewireBus oneWireBus1
 
    #include <DallasTemperature.h>
 #include "temperature_sensors.h"
 
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-// - CONTROL MODULES -
+#include "ph_sensor.h"
 
-// Lazy (sleeping) Servos
+   #include <Dht11.h>
+#include "humidity_sensors.h"
+
+#include "sonar_sensor.h"
+
    #include <Servo.h>
 #include "lazy_servo_control.h"
 
-//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
-// - LOGIC MODULES -
-
-// Heat Regulation Logic
 #include "heat_regulation_logic.h"
 
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+// PIN MAPPINGS
+//--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+#define DEBUG_LOG_INTERVAL_SPAN 3000
+#define DEBUG_LOG__STATE_REPORT 1  // Might as well go with simply "DEFAULT" - we're just using the defer-functionality in practise
 
+auto onewire_bus_1         = OneWire(2);
+auto temp_sensors          = TempSensors<10>(onewire_bus_1, 0.5, 750, 300);
+auto humidity_sensor       = HumiditySensor(3,  2000, 2.0);
+auto ph_sensor             = PhOne(12,  100, 20.0);
+auto sonar_sensor          = SonarPingSensor(8, 9,  35);
+auto heat_controller       = LazyServoControl(4,  0.03, 1500);
+auto heat_regulation_logic = HeatRegulationLogic<10, Reald>(temp_sensors, humidity_sensor, heat_controller, 5.0);
 
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 // MAIN INIT AND LOOP
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+void log_update();
 
-void setup(void) {
-   Serial.begin(9600);
 
+void setup() {
    if (COMPLETE_HALT) return;
 
-   init_temp_sensors();
-   init_humidity_sensors();
-   init_ph_sensor();
-   init_sonar_ping_sensors();
+   Serial.begin(9600);
+   serial_activated = true;
 
-   init_heat_regulation_logic();
-
-   init_lazy_servo_control();
+   say("> > > Serial Kicked Off < < <\n");
 }
 
-void loop(void) {
+void loop() {
    if (COMPLETE_HALT) return;
 
-   attend_temp_sensors();
-   attend_humidity_sensors();
-   attend_ph_sensor();
-   attend_sonar_ping_sensors();
+   // Sensors
+   temp_sensors.update();
+   humidity_sensor.update();
+   ph_sensor.update();
+   sonar_sensor.update();
 
-   attend_heat_regulation_logic();
+   // Logic
+   heat_regulation_logic.update();
 
-   attend_lazy_servo_control();
+   // Controllers
+   heat_controller.update();
 
    #ifdef DEBUG
-      debug_logging();
+      log_update();
    #endif
 }
 
-void debug_logging(void) {
-   static Fsm fsm = {DEBUG_LOG__STATE_REPORT, 0, 0, __STATE_NONE};
+void log_update() {
+   static FsmHelper fsm;
 
-   if (check_state_deferring(&fsm)) return;
+   if (fsm.is_sleeping())
+      return;
 
-   log_temp_sensors();
-   Serial.print(" - ");
+   temp_sensors.log();
+   say("\n");
 
-   log_humidity_sensors();
-   Serial.println();
+   humidity_sensor.log();
+   say(" - ");
 
-   log_sonar_ping_sensors();
-   Serial.print(" - ");
+   sonar_sensor.log();
+   say(" - ");
 
-   log_ph_sensor();
-   Serial.println();
+   ph_sensor.log();
 
-   defer_state(&fsm, DEBUG_LOG__STATE_REPORT, DEBUG_LOG_INTERVAL_SPAN);
+   say("\n");
+
+   fsm.sleep(DEBUG_LOG_INTERVAL_SPAN);
 }
