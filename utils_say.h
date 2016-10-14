@@ -20,11 +20,20 @@
 // `say` for outputting stuff on serial in an informal way (debug/log)
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 #ifdef DEBUG
-   #define say(a...)    { check_fatal_msgs(); Serial.print(a); }
+   #define say(x...)    { check_fatal_msgs(); Serial.print(x); }
 #else
-   #define say(a...)    {}
+   #define say(x...)    {}
 #endif
 
+#define alert(x...)     { say("\e[31;1m"); say(x); say("\e[0m"); }
+
+
+#ifdef DEBUG
+   #define report_anamoly(x...)   { alert(x); }
+#else
+   // *TODO* add CmdMessenger to project!
+   #define report_anamoly(x...)   { Commander.write(x); } // `write(void)` writes a "command done" (";" by default)
+#endif
 
 //--- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 // Fatal errors debugging

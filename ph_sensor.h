@@ -2,6 +2,15 @@
 #include "SignalProcessingEma.h"
 #include "utils.h"
 
+// *TODO* - ADD:
+// - Calibration mode:
+//       - REQUIRES: CmdMessenger for asynchronous serial communication
+//    - store cal point
+//    - store Diff
+//    - Diff from prev. drift compensation (included in above points - just remember!!)
+// - On post-cal runs: Interpolated Drift Compensation
+
+
 class PhOne : public ChronoTwinedFsmModule {
    F32                        result;
    I8                         sensor_pin = -1;
@@ -25,6 +34,8 @@ class PhOne : public ChronoTwinedFsmModule {
       say("pH: ");
       say(result, 2);
    }
+
+   bool is_ready() { return true; }
 
    void update() {
       switch (where_to_go()) {

@@ -41,20 +41,18 @@ class FsmHelper {
       return where_to_go() == FsmSleeping; //in_sleeping_wait;
    }
 
-   // Bool has_scheduled() {
-   //    if (scheduled_state) {
-   //       return true;
-   //    } else {
-   //       return false;
-   //    }
-   // }
-
    void go_next(FsmState state_, Bool keep_scheduled = false) {
       state = state_;
       touch();
 
       if (keep_scheduled == false)
          cancel_scheduled_state();
+   }
+
+   void go_next_if(FsmState state_, FsmState check_state_equals) {
+      if (state == check_state_equals) {
+         go_next(state_); // Add "keep_scheduled" when/if needed
+      }
    }
 
    void go_after(FsmState state_, TimeSpan delay, Bool reset_timestamp) {

@@ -82,7 +82,9 @@ CXXFLAGS_WARNS    = -pedantic -Wall -Wextra
 CXXFLAGS = $(CXXFLAGS_WARNS) $(EXTRA_INCLUDES)
 CXXFLAGS += $(CXXALTS)
 CXXFLAGS += $(CXXFLAGS_STD)
-CXXFLAGS += -I/home/oscar/sketchbook/libraries/OneWire -I/home/oscar/sketchbook/libraries/DallasTemperature/
+CXXFLAGS += -I/home/oscar/sketchbook/libraries/OneWire
+CXXFLAGS += -I/home/oscar/sketchbook/libraries/DallasTemperature/
+# CXXFLAGS += -I/home/oscar/sketchbook/libraries/RTClib/
 
 CFLAGS = $(CFLAGS_STD)
 

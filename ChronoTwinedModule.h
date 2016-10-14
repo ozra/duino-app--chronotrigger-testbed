@@ -5,6 +5,7 @@
 
 class ChronoTwinedModule {
   public:
+   virtual bool is_ready() = 0;
    virtual void update() = 0;
    virtual void log() = 0;
 };

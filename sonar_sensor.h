@@ -30,8 +30,10 @@ class SonarPingSensor : public ChronoTwinedFsmModule {
       Serial.print(" cm");
    }
 
+   bool is_ready() { return true; }
+
    void update() {
-      if (where_to_go() != Default)
+      if (is_sleeping())
          return;
 
       digitalWrite(trigger_pin, LOW);

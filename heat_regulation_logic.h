@@ -16,6 +16,9 @@ class HeatRegulationLogic : public ChronoTwinedFsmModule {
    Reald                   full_action_delta_thresh;
 
   public:
+   // add_state(Disabled, 1)
+   static const Intd  Disabled      = 1;
+
    HeatRegulationLogic(
                   TempSensors<NUM>& temp_sensors_,
                   HumiditySensor& humidity_sensor_,
@@ -27,6 +30,20 @@ class HeatRegulationLogic : public ChronoTwinedFsmModule {
       controllable(controllable_),
       full_action_delta_thresh(full_action_delta_thresh_)
    {}
+
+   bool is_ready() { return true; }
+
+   // Useful for other logic to temporarily disable for overriding actions on
+   // controller in certain states
+   void enable() {
+      // _enabled = true;
+      go_next_if(Main, Disabled);
+   }
+
+   void disable() {
+      // _enabled = false;
+      go_next(Disabled);
+   }
 
    void update() {
       switch(where_to_go()) {

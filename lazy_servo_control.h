@@ -9,6 +9,7 @@
 class LazyServoControl : public PercentControl<Reald> {
    Intd  servo_pin;
    Reald move_lazyness_thresh;
+   Intd  idle_duration_for_sleep;
    Intd  full_rotate_duration;
    Intd  min_rotate_duration;
    Reald min_usecs;
@@ -29,6 +30,7 @@ class LazyServoControl : public PercentControl<Reald> {
                Intd     servo_pin_,
                Reald    move_lazyness_thresh_ = 0.1,
                TimeSpan full_rotate_duration_ = 1500,
+               Intd     idle_duration_for_sleep_ = 2000,
                TimeSpan min_rotate_duration_ = 20,
                Intd     min_usecs_ = 544,
                Intd     max_usecs_ = 2400
@@ -36,6 +38,7 @@ class LazyServoControl : public PercentControl<Reald> {
       servo_pin(servo_pin_),
       move_lazyness_thresh(move_lazyness_thresh_),
       full_rotate_duration(full_rotate_duration_),
+      idle_duration_for_sleep(idle_duration_for_sleep_),
       min_rotate_duration(min_rotate_duration_)
    {
       set_servo_limits(min_usecs_, max_usecs_),
@@ -51,6 +54,8 @@ class LazyServoControl : public PercentControl<Reald> {
    void set(Reald value_) {
       target_value = value_;
    }
+
+   bool is_ready() { return true; }
 
    void update() {
       Intd  allowance;
@@ -72,7 +77,7 @@ class LazyServoControl : public PercentControl<Reald> {
             allowance = adjust_servo(); // go_next(Adjust);
             sleep(allowance);
          } else {
-            go_after(ServoSleep, 2500, false);
+            go_after(ServoSleep, idle_duration_for_sleep, false);
          }
       break;
 

@@ -12,8 +12,11 @@
 
 #define TEMPING_FULL_12BIT_WAIT_SPAN   750
 
-typedef uint8_t   OneWireDeviceAddr[8];
-typedef uint8_t*  OneWireDeviceAddrPtr;
+#define NO_READING_INTERVAL_RETRY_REQUEST    2200
+#define NO_READING_INTERVAL_ALERT            6000
+
+typedef U8   OneWireDeviceAddr[8];
+typedef U8*  OneWireDeviceAddrPtr;
 
 
 template <Intd ALLOC_SENSORS>
@@ -25,7 +28,8 @@ class TempSensors : public ChronoTwinedFsmModule {
    TimeSpan          initial_wait;
    TimeSpan          check_interval;
 
-   Bool              ready = false;
+   // Bool              ready = false;
+   TimeStamp         mtime = 0;
    Intd              actual_sensor_count;
 
    OneWireDeviceAddr temp_sensor_addr_ids[ALLOC_SENSORS];
@@ -40,25 +44,19 @@ class TempSensors : public ChronoTwinedFsmModule {
    static const Intd AwaitReadings   = 2;
 
    TempSensors(
-      OneWire& onewire_bus_,
-      Reald smoothing_k_value_,
-      TimeSpan initial_wait_ = TEMPING_FULL_12BIT_WAIT_SPAN,
-      TimeSpan check_interval_ = 300
+            OneWire& onewire_bus_,
+            Reald smoothing_k_value_ = 1.0,
+            TimeSpan initial_wait_ = TEMPING_FULL_12BIT_WAIT_SPAN,
+            TimeSpan check_interval_ = 300
    ) :
-      onewire_bus(onewire_bus_),
-      temp_sensors_interface(&onewire_bus),
-      initial_wait(initial_wait_),
-      check_interval(check_interval_)
+         onewire_bus(onewire_bus_),
+         temp_sensors_interface(&onewire_bus),
+         initial_wait(initial_wait_),
+         check_interval(check_interval_)
    {
+      // *TODO* - Maybe move anything not a simple list-init _back_ to `setup()` again!
+
       ema.change_k(smoothing_k_value_);
-
-
-
-
-      // Move anything not a simple list-init back to `setup()` again!
-
-
-      // say("TempSensors: Dallas Temperature IC Control");
 
       // Start up the library
       temp_sensors_interface.begin();
@@ -72,16 +70,18 @@ class TempSensors : public ChronoTwinedFsmModule {
       U8*   tmp_addr_id;
 
       while (true) {
+         if (sensor_ix == ALLOC_SENSORS) {
+            fatal("TempSensors found too many sensors - we're only set up for ");
+            fatal(ALLOC_SENSORS);
+            break;
+         }
+
          tmp_addr_id = temp_sensor_addr_ids[sensor_ix];
 
          if (onewire_bus.search(tmp_addr_id) == false)
             break;
 
-         // *TODO* check that it actually is a temp-sensor device!
-
-         // *TODO* check that ALLOC_SENSORS isn't surpassed - if so alert()!
-
-         // log_addr_id(sensor_ix, tmp_addr_id);
+         // *TODO* check that it actually is a temp-sensor of our kind!
 
          temp_gotten[sensor_ix] = false;
          ++sensor_ix;
@@ -93,7 +93,7 @@ class TempSensors : public ChronoTwinedFsmModule {
    }
 
    bool is_ready() {
-      return ready;
+      return mtime != 0;
    }
 
    void log_addr_id(const OneWireDeviceAddrPtr tmp_addr_id) {
@@ -103,15 +103,19 @@ class TempSensors : public ChronoTwinedFsmModule {
    }
 
    void log() {
+      check_integrity_ok();
+
       for(Intd ix = 0; ix < actual_sensor_count; ++ix) {
          say("  T[");
          say(ix);
-         say("](");
-         log_addr_id(temp_sensor_addr_ids[ix]);
-         say("): ");
+         say("]: ");
+         // say("](");
+         // log_addr_id(temp_sensor_addr_ids[ix]);
+         // say("): ");
          say(results[ix]);
          say("C, ");
       }
+
    }
 
    void update() {
@@ -125,10 +129,7 @@ class TempSensors : public ChronoTwinedFsmModule {
          // call temp_sensors_interface.requestTemperatures() to issue a global temperature
          // request to all devices on the bus
          temp_sensors_interface.requestTemperatures(); // Send the command to get temperatures
-         gotten_results_count = 0;
-         for(Intd ix = 0; ix < actual_sensor_count; ++ix) {
-            temp_gotten[ix] = false;
-         }
+         clear_gotten_state();
 
          go_after_sleep(AwaitReadings, initial_wait);
       break;
@@ -136,7 +137,23 @@ class TempSensors : public ChronoTwinedFsmModule {
       case AwaitReadings:
          // say("TEMPING__STATE_AWAIT_RESULTS\n");
 
-         for(Intd ix = 0; ix < actual_sensor_count; ++ix) {
+         // *TODO* ahead of the check-integrity, we check it here: clear and
+         // request again - if too much time has passed - some sensor might have
+         // said not ready, and then dropped it.
+         TimeSpan time_since_update = (millis() - mtime);
+
+         if ((time_since_update > NO_READING_INTERVAL_RETRY_REQUEST) && (mtime != 0)) {
+            report_anamoly("temp_sensors: ANAMOLY: too long time without full results, got ");
+            report_anamoly(gotten_results_count);
+            report_anamoly(" out of ");
+            report_anamoly(actual_sensor_count);
+            report_anamoly("\n");
+            clear_gotten_state();
+            go_next(RequestReadings);
+            return;
+         }
+
+         for (Intd ix = 0; ix < actual_sensor_count; ++ix) {
             if (temp_gotten[ix])
                continue;
 
@@ -166,7 +183,7 @@ class TempSensors : public ChronoTwinedFsmModule {
          }
 
          if (gotten_results_count == actual_sensor_count) {
-            ready = true;
+            mtime = millis();
             // say("TEMPING - GOT ALL RESULTS!\n");
             go_next(RequestReadings);
          } else {
@@ -178,5 +195,25 @@ class TempSensors : public ChronoTwinedFsmModule {
       }
    }
 
+  private:
+   void clear_gotten_state() {
+      gotten_results_count = 0;
+      for(Intd ix = 0; ix < actual_sensor_count; ++ix) {
+         temp_gotten[ix] = false;
+      }
+   }
 
+   Bool check_integrity_ok() {
+      TimeSpan time_since_update = (millis() - mtime);
+
+      if ((time_since_update > NO_READING_INTERVAL_ALERT) && (mtime != 0)) {
+         alert("\n\nALERT! temp_sensors hasn't gotten a new reading for a long time! Something is wrong!\n\n");
+         return false;
+
+      } else if (time_since_update < 0) {
+         alert("\nPassed 0-meridian of time-cycle\n");
+         mtime = millis(); // Catch it later
+      }
+      return true;
+   }
 };
