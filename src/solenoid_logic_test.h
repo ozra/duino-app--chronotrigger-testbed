@@ -5,7 +5,8 @@
 
 class SolenoidLogicTest : public ChronoTwinedFsmModule {
    Intd        pin;
-   TimeSpan    toggle_interval;
+   TimeSpan    on_duration;
+   TimeSpan    off_duration;
    TimeSpan    start_delay;
    Intd        state;
 
@@ -13,12 +14,14 @@ class SolenoidLogicTest : public ChronoTwinedFsmModule {
 
    SolenoidLogicTest(
                   Intd     pin_,
-                  TimeSpan toggle_interval_,
+                  TimeSpan on_duration_,
+                  TimeSpan off_duration_,
                   TimeSpan start_delay_ = 0,
                   Intd     initial_state_ = 0
    ) :
          pin(pin_),
-         toggle_interval(toggle_interval_),
+         on_duration(on_duration_),
+         off_duration(off_duration_),
          start_delay(start_delay_),
          state(initial_state_)
    {
@@ -43,12 +46,12 @@ class SolenoidLogicTest : public ChronoTwinedFsmModule {
       if (state == 0) {
          state = 1;
          digitalWrite(pin, HIGH);
+         sleep(on_duration);
       } else {
          state = 0;
          digitalWrite(pin, LOW);
+         sleep(off_duration);
       }
-
-      sleep(toggle_interval);
    }
 
 };

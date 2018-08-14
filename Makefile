@@ -1,6 +1,25 @@
 
 # NICE_ERRORS=1
 
+### BOARD_TAG & BOARD_SUB
+### For Arduino IDE 1.0.x
+### Only BOARD_TAG is needed. It must be set to the board you are currently using. (i.e uno, mega2560, etc.)
+# BOARD_TAG         = mega2560
+### For Arduino IDE 1.6.x
+### Both BOARD_TAG and BOARD_SUB are needed. They must be set to the board you are currently using. (i.e BOARD_TAG = uno, mega, etc. & BOARD_SUB = atmega2560, etc.)
+### Note: for the Arduino Uno, only BOARD_TAG is mandatory and BOARD_SUB can be equal to anything
+BOARD_TAG         = mega
+BOARD_SUB         = atmega2560
+
+MCU = atmega2560
+
+### MONITOR_BAUDRATE
+### It must be set to Serial baudrate value you are using.
+MONITOR_BAUDRATE  = 9600
+### 115200
+
+
+
 ifdef NICE_ERRORS
 	NICE_ERRORS_COMPILE_ONLY = 1
 
@@ -23,10 +42,6 @@ else
 
 endif
 
-### DISCLAIMER
-### This is an example Makefile and it MUST be configured to suit your needs.
-### For detailled explanations about all the avalaible options,
-### please refer to https://github.com/sudar/Arduino-Makefile/blob/master/arduino-mk-vars.md
 
 ### PROJECT_DIR
 ### This is the path to where you have created/cloned your project
@@ -46,24 +61,7 @@ ARDUINO_DIR       = /usr/share/arduino
 
 ### USER_LIB_PATH
 ### Path to where the your project's libraries are stored.
-USER_LIB_PATH     :=  $(realpath $(PROJECT_DIR)/lib)
-
-### BOARD_TAG & BOARD_SUB
-### For Arduino IDE 1.0.x
-### Only BOARD_TAG is needed. It must be set to the board you are currently using. (i.e uno, mega2560, etc.)
-# BOARD_TAG         = mega2560
-### For Arduino IDE 1.6.x
-### Both BOARD_TAG and BOARD_SUB are needed. They must be set to the board you are currently using. (i.e BOARD_TAG = uno, mega, etc. & BOARD_SUB = atmega2560, etc.)
-### Note: for the Arduino Uno, only BOARD_TAG is mandatory and BOARD_SUB can be equal to anything
-BOARD_TAG         = mega
-BOARD_SUB         = atmega2560
-
-MCU = atmega2560
-
-### MONITOR_BAUDRATE
-### It must be set to Serial baudrate value you are using.
-MONITOR_BAUDRATE  = 9600
-### 115200
+USER_LIB_PATH     :=  $(realpath $(PROJECT_DIR)/deps)
 
 ### AVR_TOOLS_DIR
 ### Path to the AVR tools directory such as avr-gcc, avr-g++, etc.
@@ -82,8 +80,10 @@ CXXFLAGS_WARNS    = -pedantic -Wall -Wextra
 CXXFLAGS = $(CXXFLAGS_WARNS) $(EXTRA_INCLUDES)
 CXXFLAGS += $(CXXALTS)
 CXXFLAGS += $(CXXFLAGS_STD)
-CXXFLAGS += -I/home/oscar/sketchbook/libraries/OneWire
-CXXFLAGS += -I/home/oscar/sketchbook/libraries/DallasTemperature/
+
+# *TODO* this should be completely fucking automatic!
+CXXFLAGS += -I/home/oscar/ xxx /libraries/OneWire
+CXXFLAGS += -I/home/oscar/ xxx /libraries/DallasTemperature/
 # CXXFLAGS += -I/home/oscar/sketchbook/libraries/RTClib/
 
 CFLAGS = $(CFLAGS_STD)
@@ -102,16 +102,21 @@ CURRENT_DIR       = $(shell basename $(CURDIR))
 
 ### OBJDIR
 ### This is were you put the binaries you just compile using 'make'
-CURRENT_DIR       = $(shell basename $(CURDIR))
-OBJDIR            = $(PROJECT_DIR)/bin/$(CURRENT_DIR)/$(BOARD_TAG)
+OBJDIR            = $(PROJECT_DIR)/build/$(CURRENT_DIR)/$(BOARD_TAG)
 
 ### path to Arduino.mk, inside the ARDMK_DIR, don't touch.
 include $(ARDMK_DIR)/Arduino.mk
 
 
 upload:
-	$(AVRDUDE2) -C/usr/share/arduino/hardware/tools/avrdude.conf -v -patmega2560 -cwiring -P/dev/ttyACM0 -b115200 -D -U flash:w:/home/oscar/3-p/arduino/schwarzwald_multiple_parts_testbed/bin/schwarzwald_multiple_parts_testbed/mega/schwarzwald_multiple_parts_testbed.hex:i
+	# *TODO* this uses hardcoded paths badly
+	$(AVRDUDE2) \
+	-C/usr/share/arduino/hardware/tools/avrdude.conf \
+	-v -patmega2560 -cwiring -P/dev/ttyACM0 -b115200 \
+	-D -U flash:w:/home/oscar/3-p/PATH_TO_BUILD_DONE_BINARY.hex:i
 
 log:
-	stty -F /dev/ttyACM0 9600 raw -clocal -echo icrnl
-	cat /dev/ttyACM0
+	stty -F $MONITOR_PORT $MONITOR_BAUDRATE raw \
+	-clocal -echo icrnl
+	cat $MONITOR_PORT
+
